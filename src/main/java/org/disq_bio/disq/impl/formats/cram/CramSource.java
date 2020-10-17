@@ -68,18 +68,6 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
 
   private final PathSplitSource pathSplitSource;
 
-  private void logMsg(String msg) {
-    System.out.println("*");
-    System.out.println("*");
-    System.out.println("*");
-    System.out.println("*");
-    System.out.println("*> " + msg);
-    System.out.println("*");
-    System.out.println("*");
-    System.out.println("*");
-    System.out.println("*");
-  }
-
   public CramSource(FileSystemWrapper fileSystemWrapper) {
     super(fileSystemWrapper);
     this.pathSplitSource = new PathSplitSource(fileSystemWrapper);
@@ -103,18 +91,18 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
 
     // store paths (not full URIs) to avoid differences in scheme - this could be improved
     Map<String, NavigableSet<Long>> pathToContainerOffsets = new LinkedHashMap<>();
-    long containerOffsetsLoadingTimeDirectory;
-    long containerOffsetsLoadingTime;
+    //    long containerOffsetsLoadingTimeDirectory;
+    //    long containerOffsetsLoadingTime;
 
-    logMsg("Loading container offsets");
+    //    logMsg("Loading container offsets");
     if (fileSystemWrapper.isDirectory(conf, path)) {
-      logMsg("Inside if directory");
+      //      logMsg("Inside if directory");
       List<FileSystemWrapper.FileStatus> statuses =
           fileSystemWrapper.listDirectoryStatus(conf, path).stream()
               .filter(fs -> SamFormat.CRAM.fileMatches(fs.getPath()))
               .collect(Collectors.toList());
-      logMsg("Container offsets for each status");
-      long before = System.currentTimeMillis();
+      //      logMsg("Container offsets for each status");
+      //      long before = System.currentTimeMillis();
       for (FileSystemWrapper.FileStatus status : statuses) {
         String p = status.getPath();
         long cramFileLength = status.getLength();
@@ -122,39 +110,39 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
         String normPath = URI.create(fileSystemWrapper.normalize(conf, p)).getPath();
         pathToContainerOffsets.put(normPath, containerOffsets);
       }
-      long after = System.currentTimeMillis();
-      containerOffsetsLoadingTimeDirectory = after - before;
-      logMsg(
-          "Container offsets loading for directory took "
-              + containerOffsetsLoadingTimeDirectory
-              + " milliseconds");
+      //      long after = System.currentTimeMillis();
+      //      containerOffsetsLoadingTimeDirectory = after - before;
+      //      logMsg(
+      //          "Container offsets loading for directory took "
+      //              + containerOffsetsLoadingTimeDirectory
+      //              + " milliseconds");
     } else {
       long cramFileLength = fileSystemWrapper.getFileLength(conf, path);
-      long before = System.currentTimeMillis();
+      //      long before = System.currentTimeMillis();
       NavigableSet<Long> containerOffsets =
           getContainerOffsetsFromIndex(conf, path, cramFileLength);
-      long after = System.currentTimeMillis();
-      containerOffsetsLoadingTime = after - before;
-      logMsg(
-          "Container offsets loading for no directory took "
-              + containerOffsetsLoadingTime
-              + " milliseconds");
+      //      long after = System.currentTimeMillis();
+      //      containerOffsetsLoadingTime = after - before;
+      //      logMsg(
+      //          "Container offsets loading for no directory took "
+      //              + containerOffsetsLoadingTime
+      //              + " milliseconds");
       String normPath = URI.create(fileSystemWrapper.normalize(conf, path)).getPath();
       pathToContainerOffsets.put(normPath, containerOffsets);
     }
 
-    long broadcastTime;
-    long before = System.currentTimeMillis();
+    //    long broadcastTime;
+    //    long before = System.currentTimeMillis();
     Broadcast<Map<String, NavigableSet<Long>>> containerOffsetsBroadcast =
         jsc.broadcast(pathToContainerOffsets);
-    long after = System.currentTimeMillis();
-    broadcastTime = after - before;
-    logMsg("Broadcast took " + broadcastTime + " milliseconds");
+    //    long after = System.currentTimeMillis();
+    //    broadcastTime = after - before;
+    //    logMsg("Broadcast took " + broadcastTime + " milliseconds");
 
     SerializableHadoopConfiguration confSer =
         new SerializableHadoopConfiguration(jsc.hadoopConfiguration());
 
-    before = System.currentTimeMillis();
+    //    before = System.currentTimeMillis();
     JavaRDD<PathChunk> chunk =
         pathSplitSource
             .getPathSplits(jsc, path, splitSize)
@@ -181,9 +169,9 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
                                   BlockCompressedFilePointerUtil.makeFilePointer(newEnd - 1)));
                       return Collections.singleton(pathChunk).iterator();
                     });
-    after = System.currentTimeMillis();
-    long pathChunkTime = after - before;
-    logMsg("Read path chunk into RDD took " + pathChunkTime + " milliseconds");
+    //    after = System.currentTimeMillis();
+    //    long pathChunkTime = after - before;
+    //    logMsg("Read path chunk into RDD took " + pathChunkTime + " milliseconds");
     return chunk;
   }
 
@@ -193,12 +181,12 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
       if (in == null) {
         return getContainerOffsetsFromFile(conf, path, cramFileLength);
       }
-      long before = System.currentTimeMillis();
+      //      long before = System.currentTimeMillis();
       NavigableSet<Long> containerOffsets = new TreeSet<>();
       CRAIIndex index = CRAMCRAIIndexer.readIndex(in);
-      long after = System.currentTimeMillis();
-      long elapsed = after - before;
-      logMsg("CRAMCRAIIndexer readIndex took " + elapsed + " milliseconds");
+      //      long after = System.currentTimeMillis();
+      //      long elapsed = after - before;
+      //      logMsg("CRAMCRAIIndexer readIndex took " + elapsed + " milliseconds");
       for (CRAIEntry entry : index.getCRAIEntries()) {
         containerOffsets.add(entry.getContainerStartByteOffset());
       }

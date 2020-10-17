@@ -41,6 +41,7 @@ import htsjdk.samtools.util.Locatable;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -57,6 +58,18 @@ public abstract class AbstractBinarySamSource extends AbstractSamSource {
 
   protected AbstractBinarySamSource(FileSystemWrapper fileSystemWrapper) {
     super(fileSystemWrapper);
+  }
+
+  protected void logMsg(String msg) {
+    System.out.println("*");
+    System.out.println("*");
+    System.out.println("*");
+    System.out.println("*");
+    System.out.println("*> " + msg);
+    System.out.println("*");
+    System.out.println("*");
+    System.out.println("*");
+    System.out.println("*");
   }
 
   /**
@@ -78,86 +91,152 @@ public abstract class AbstractBinarySamSource extends AbstractSamSource {
       throw new IllegalArgumentException("Traversing mapped reads only is not supported.");
     }
 
+    long beforeBroadcast = System.currentTimeMillis();
     Broadcast<HtsjdkReadsTraversalParameters<T>> traversalParametersBroadcast =
         traversalParameters == null ? null : jsc.broadcast(traversalParameters);
     SerializableHadoopConfiguration confSer =
         new SerializableHadoopConfiguration(jsc.hadoopConfiguration());
+    long afterBroadcast = System.currentTimeMillis();
+    logMsg(
+        "Broadcasting traversal parameters in getReads took "
+            + (afterBroadcast - beforeBroadcast)
+            + " milliseconds");
 
-    return getPathChunks(jsc, path, splitSize, validationStringency, referenceSourcePath)
-        .mapPartitions(
-            (FlatMapFunction<Iterator<PathChunk>, SAMRecord>)
-                pathChunks -> {
-                  Configuration c = confSer.getConf();
-                  if (!pathChunks.hasNext()) {
-                    return Collections.emptyIterator();
-                  }
-                  PathChunk pathChunk = pathChunks.next();
-                  if (pathChunks.hasNext()) {
-                    throw new IllegalArgumentException(
-                        "Should not have more than one path chunk per partition");
-                  }
-                  String p = pathChunk.getPath();
-                  SamReader samReader =
-                      createSamReader(c, p, validationStringency, referenceSourcePath);
-                  BAMFileSpan splitSpan = new BAMFileSpan(pathChunk.getSpan());
-                  HtsjdkReadsTraversalParameters<T> traversal =
-                      traversalParametersBroadcast == null
-                          ? null
-                          : traversalParametersBroadcast.getValue();
-                  if (traversal == null) {
-                    // no intervals or unplaced, unmapped reads
-                    return new AutocloseIteratorWrapper<>(
-                        getIterator(samReader, splitSpan), samReader);
-                  } else {
-                    if (!samReader.hasIndex()) {
-                      samReader.close();
-                      throw new IllegalArgumentException(
-                          "Intervals set but no index file found for " + p);
-                    }
-                    BAMIndex idx = samReader.indexing().getIndex();
-                    long startOfLastLinearBin = idx.getStartOfLastLinearBin();
-                    long noCoordinateCount = ((AbstractBAMFileIndex) idx).getNoCoordinateCount();
-                    Iterator<SAMRecord> intervalReadsIterator;
-                    if (traversal.getIntervalsForTraversal() == null
-                        || traversal.getIntervalsForTraversal().isEmpty()) {
-                      intervalReadsIterator = Collections.emptyIterator();
-                      samReader.close(); // not used from this point on
-                    } else {
-                      SAMFileHeader header = samReader.getFileHeader();
-                      QueryInterval[] queryIntervals =
-                          BoundedTraversalUtil.prepareQueryIntervals(
-                              traversal.getIntervalsForTraversal(), header.getSequenceDictionary());
-                      BAMFileSpan span = BAMFileReader.getFileSpan(queryIntervals, idx);
-                      span = (BAMFileSpan) span.removeContentsBefore(splitSpan);
-                      span = (BAMFileSpan) span.removeContentsAfter(splitSpan);
-                      intervalReadsIterator =
-                          new AutocloseIteratorWrapper<>(
-                              createIndexIterator(
-                                  samReader, queryIntervals, false, span.toCoordinateArray()),
-                              samReader);
-                    }
-
-                    // add on unplaced unmapped reads if there are any in this range
-                    if (traversal.getTraverseUnplacedUnmapped()) {
-                      if (startOfLastLinearBin != -1
-                          && noCoordinateCount >= getMinUnplacedUnmappedReadsCoordinateCount()) {
-                        long unplacedUnmappedStart = startOfLastLinearBin;
-                        if (pathChunk.getSpan().getChunkStart() <= unplacedUnmappedStart
-                            && unplacedUnmappedStart < pathChunk.getSpan().getChunkEnd()) {
-                          SamReader unplacedUnmappedReadsSamReader =
-                              createSamReader(c, p, validationStringency, referenceSourcePath);
-                          Iterator<SAMRecord> unplacedUnmappedReadsIterator =
-                              new AutocloseIteratorWrapper<>(
-                                  unplacedUnmappedReadsSamReader.queryUnmapped(),
-                                  unplacedUnmappedReadsSamReader);
-                          return Iterators.concat(
-                              intervalReadsIterator, unplacedUnmappedReadsIterator);
-                        }
+    long before = System.currentTimeMillis();
+    AtomicInteger partitions = new AtomicInteger();
+    JavaRDD<SAMRecord> record =
+        getPathChunks(jsc, path, splitSize, validationStringency, referenceSourcePath)
+            .mapPartitions(
+                (FlatMapFunction<Iterator<PathChunk>, SAMRecord>)
+                    pathChunks -> {
+                      Configuration c = confSer.getConf();
+                      if (!pathChunks.hasNext()) {
+                        return Collections.emptyIterator();
                       }
-                    }
-                    return intervalReadsIterator;
-                  }
-                });
+                      PathChunk pathChunk = pathChunks.next();
+                      if (pathChunks.hasNext()) {
+                        throw new IllegalArgumentException(
+                            "Should not have more than one path chunk per partition");
+                      }
+                      String p = pathChunk.getPath();
+                      long beforeCreateReader = System.currentTimeMillis();
+                      SamReader samReader =
+                          createSamReader(c, p, validationStringency, referenceSourcePath);
+                      long afterCreateReader = System.currentTimeMillis();
+                      logMsg(
+                          "Create SAM reader took "
+                              + (afterCreateReader - beforeCreateReader)
+                              + " milliseconds for thread "
+                              + Thread.currentThread().getName());
+                      long beforeSpan = System.currentTimeMillis();
+                      BAMFileSpan splitSpan = new BAMFileSpan(pathChunk.getSpan());
+                      long afterSpan = System.currentTimeMillis();
+                      logMsg(
+                          "create BAMFileSpan took "
+                              + (afterSpan - beforeSpan)
+                              + " ms for thread "
+                              + Thread.currentThread().getName());
+                      HtsjdkReadsTraversalParameters<T> traversal =
+                          traversalParametersBroadcast == null
+                              ? null
+                              : traversalParametersBroadcast.getValue();
+                      if (traversal == null) {
+                        long beforeAutocloseIter = System.currentTimeMillis();
+                        // no intervals or unplaced, unmapped reads
+                        AutocloseIteratorWrapper<SAMRecord> iter =
+                            new AutocloseIteratorWrapper<>(
+                                getIterator(samReader, splitSpan), samReader);
+                        long afterAutocloseIter = System.currentTimeMillis();
+                        logMsg(
+                            "Creating autoclose iterator for record took "
+                                + (afterAutocloseIter - beforeAutocloseIter)
+                                + " ms for thread "
+                                + Thread.currentThread().getName());
+                        return iter;
+                        // end here for cram with supplied reference
+                      } else {
+                        if (!samReader.hasIndex()) {
+                          samReader.close();
+                          throw new IllegalArgumentException(
+                              "Intervals set but no index file found for " + p);
+                        }
+                        BAMIndex idx = samReader.indexing().getIndex();
+                        long startOfLastLinearBin = idx.getStartOfLastLinearBin();
+                        long noCoordinateCount =
+                            ((AbstractBAMFileIndex) idx).getNoCoordinateCount();
+                        Iterator<SAMRecord> intervalReadsIterator;
+                        if (traversal.getIntervalsForTraversal() == null
+                            || traversal.getIntervalsForTraversal().isEmpty()) {
+                          intervalReadsIterator = Collections.emptyIterator();
+                          samReader.close(); // not used from this point on
+                        } else {
+                          long beforeSAMheader = System.currentTimeMillis();
+                          SAMFileHeader header = samReader.getFileHeader();
+                          long afterSAMheader = System.currentTimeMillis();
+                          logMsg(
+                              "Get SAM file header took "
+                                  + (afterSAMheader - beforeSAMheader)
+                                  + " milliseconds");
+                          long beforeQueryIntervals = System.currentTimeMillis();
+                          QueryInterval[] queryIntervals =
+                              BoundedTraversalUtil.prepareQueryIntervals(
+                                  traversal.getIntervalsForTraversal(),
+                                  header.getSequenceDictionary());
+                          long afterQueryIntervals = System.currentTimeMillis();
+                          logMsg(
+                              "Query intervals for traversal took "
+                                  + (afterQueryIntervals - beforeQueryIntervals)
+                                  + " ms");
+                          BAMFileSpan span = BAMFileReader.getFileSpan(queryIntervals, idx);
+                          span = (BAMFileSpan) span.removeContentsBefore(splitSpan);
+                          span = (BAMFileSpan) span.removeContentsAfter(splitSpan);
+                          long beforeIndexIter = System.currentTimeMillis();
+                          intervalReadsIterator =
+                              new AutocloseIteratorWrapper<>(
+                                  createIndexIterator(
+                                      samReader, queryIntervals, false, span.toCoordinateArray()),
+                                  samReader);
+                          long afterIndexIter = System.currentTimeMillis();
+                          logMsg(
+                              "Building index iterator (without unmapped) took "
+                                  + (afterIndexIter - beforeIndexIter)
+                                  + " ms");
+                        }
+
+                        // add on unplaced unmapped reads if there are any in this range
+                        long beforeUnmappedRds = System.currentTimeMillis();
+                        if (traversal.getTraverseUnplacedUnmapped()) {
+                          if (startOfLastLinearBin != -1
+                              && noCoordinateCount
+                                  >= getMinUnplacedUnmappedReadsCoordinateCount()) {
+                            long unplacedUnmappedStart = startOfLastLinearBin;
+                            if (pathChunk.getSpan().getChunkStart() <= unplacedUnmappedStart
+                                && unplacedUnmappedStart < pathChunk.getSpan().getChunkEnd()) {
+                              SamReader unplacedUnmappedReadsSamReader =
+                                  createSamReader(c, p, validationStringency, referenceSourcePath);
+                              Iterator<SAMRecord> unplacedUnmappedReadsIterator =
+                                  new AutocloseIteratorWrapper<>(
+                                      unplacedUnmappedReadsSamReader.queryUnmapped(),
+                                      unplacedUnmappedReadsSamReader);
+                              return Iterators.concat(
+                                  intervalReadsIterator, unplacedUnmappedReadsIterator);
+                            }
+                          }
+                        }
+                        long afterUnmappedRds = System.currentTimeMillis();
+                        logMsg(
+                            "Building index iterator (with unmapped reads) took "
+                                + (afterUnmappedRds - beforeUnmappedRds)
+                                + " ms");
+                        partitions.getAndIncrement();
+                        return intervalReadsIterator;
+                      }
+                    });
+    long after = System.currentTimeMillis();
+    long total = after - before;
+    logMsg("Read record took " + total + " milliseconds.");
+    logMsg("There were " + partitions + " partitions.");
+    return record;
   }
 
   protected abstract JavaRDD<PathChunk> getPathChunks(
