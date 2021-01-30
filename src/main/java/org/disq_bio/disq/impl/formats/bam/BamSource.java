@@ -98,6 +98,7 @@ public class BamSource extends AbstractBinarySamSource implements Serializable {
 
     String sbiPath = path + FileExtensions.SBI;
     if (fileSystemWrapper.exists(jsc.hadoopConfiguration(), sbiPath)) {
+      logMsg("             decoding BAM with SBI");
       logger.debug("Using SBI file {} for finding splits", sbiPath);
       try (SeekableStream sbiStream = fileSystemWrapper.open(jsc.hadoopConfiguration(), sbiPath)) {
         SBIIndex sbiIndex = SBIIndex.load(sbiStream);
@@ -106,18 +107,32 @@ public class BamSource extends AbstractBinarySamSource implements Serializable {
             .getPathSplits(jsc, path, splitSize)
             .flatMap(
                 pathSplit -> {
+                  logMsg("Building RDD chunk for BAM (no guessing)");
+                  long b = System.currentTimeMillis();
                   SBIIndex index = sbiIndexBroadcast.getValue();
                   Chunk chunk = index.getChunk(pathSplit.getStart(), pathSplit.getEnd());
                   if (chunk == null) {
+                    logMsg("BAM RDD chunk null");
+                    long a = System.currentTimeMillis();
+                    logMsg(
+                        "Building RDD chunk for BAM (chunk null, no guessing) took "
+                            + (a - b)
+                            + " miliseconds");
                     return Collections.emptyIterator();
                   } else {
                     PathChunk pathChunk = new PathChunk(path, chunk);
                     logger.debug("PathChunk: {}", pathChunk);
+                    long a = System.currentTimeMillis();
+                    logMsg(
+                        "Building RDD chunk for BAM (no guessing) took "
+                            + (a - b)
+                            + " miliseconds");
                     return Collections.singleton(pathChunk).iterator();
                   }
                 });
       }
     } else {
+      logMsg("Decoding bam using guessing");
       logger.debug("Using guessing for finding splits");
       SerializableHadoopConfiguration confSer =
           new SerializableHadoopConfiguration(jsc.hadoopConfiguration());
@@ -126,6 +141,8 @@ public class BamSource extends AbstractBinarySamSource implements Serializable {
           .mapPartitionsWithIndex(
               (Function2<Integer, Iterator<BgzfBlockGuesser.BgzfBlock>, Iterator<PathChunk>>)
                   (partitionIndex, bgzfBlocks) -> {
+                    logMsg("Building RDD chunk for BAM (guessing)");
+                    long b = System.currentTimeMillis();
                     Configuration conf = confSer.getConf();
                     PathChunk pathChunk =
                         getFirstReadInPartition(conf, bgzfBlocks, stringency, referenceSourcePath);
@@ -133,6 +150,9 @@ public class BamSource extends AbstractBinarySamSource implements Serializable {
                     if (pathChunk == null) {
                       return Collections.emptyIterator();
                     }
+                    long a = System.currentTimeMillis();
+                    logMsg(
+                        "building RDD chunk for BAM (guessing) took " + (a - b) + " miliseconds");
                     return Collections.singleton(pathChunk).iterator();
                   },
               true);

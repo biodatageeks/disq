@@ -67,8 +67,32 @@ public class BgzfBlockSource implements Serializable {
         .flatMap(
             (FlatMapFunction<PathSplit, BgzfBlock>)
                 pathSplit -> {
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*> " + "BAM building bgzf rdd chunk (guessing)");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  long b = System.currentTimeMillis();
                   BgzfBlockGuesser bgzfBlockGuesser =
                       getBgzfSplitGuesser(confSer.getConf(), pathSplit.getPath());
+                  long a = System.currentTimeMillis();
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println(
+                      "*> "
+                          + "BAM Building RDD bgzf chunk (guessing) took "
+                          + (a - b)
+                          + " miliseconds");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
+                  System.out.println("*");
                   return getBgzfBlockIterator(bgzfBlockGuesser, pathSplit);
                 });
   }
