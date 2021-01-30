@@ -131,24 +131,25 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
       pathToContainerOffsets.put(normPath, containerOffsets);
     }
 
-    //    long broadcastTime;
-    //    long before = System.currentTimeMillis();
+    long broadcastTime;
+    long before = System.currentTimeMillis();
     Broadcast<Map<String, NavigableSet<Long>>> containerOffsetsBroadcast =
         jsc.broadcast(pathToContainerOffsets);
-    //    long after = System.currentTimeMillis();
-    //    broadcastTime = after - before;
-    //    logMsg("Broadcast took " + broadcastTime + " milliseconds");
+    long after = System.currentTimeMillis();
+    broadcastTime = after - before;
+    logMsg("Broadcast took " + broadcastTime + " milliseconds");
 
     SerializableHadoopConfiguration confSer =
         new SerializableHadoopConfiguration(jsc.hadoopConfiguration());
 
-    //    before = System.currentTimeMillis();
     JavaRDD<PathChunk> chunk =
         pathSplitSource
             .getPathSplits(jsc, path, splitSize)
             .flatMap(
                 (FlatMapFunction<PathSplit, PathChunk>)
                     pathSplit -> {
+                      logMsg("Building RDD chunk for CRAM");
+                      long b = System.currentTimeMillis();
                       Configuration c = confSer.getConf();
                       String p = pathSplit.getPath();
                       Map<String, NavigableSet<Long>> pathToOffsets =
@@ -167,11 +168,10 @@ public class CramSource extends AbstractBinarySamSource implements Serializable 
                               new Chunk(
                                   BlockCompressedFilePointerUtil.makeFilePointer(newStart),
                                   BlockCompressedFilePointerUtil.makeFilePointer(newEnd - 1)));
+                      long a = System.currentTimeMillis();
+                      logMsg("Building RDD chunk for CRAM took " + (a - b) + " miliseconds.");
                       return Collections.singleton(pathChunk).iterator();
                     });
-    //    after = System.currentTimeMillis();
-    //    long pathChunkTime = after - before;
-    //    logMsg("Read path chunk into RDD took " + pathChunkTime + " milliseconds");
     return chunk;
   }
 

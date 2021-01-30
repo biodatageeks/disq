@@ -206,6 +206,7 @@ public abstract class AbstractBinarySamSource extends AbstractSamSource {
                         // add on unplaced unmapped reads if there are any in this range
                         long beforeUnmappedRds = System.currentTimeMillis();
                         if (traversal.getTraverseUnplacedUnmapped()) {
+                          logMsg("  Unplaced unmapped reads present in this range");
                           if (startOfLastLinearBin != -1
                               && noCoordinateCount
                                   >= getMinUnplacedUnmappedReadsCoordinateCount()) {
